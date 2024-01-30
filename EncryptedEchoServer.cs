@@ -19,7 +19,6 @@ internal sealed class EncryptedEchoServer : EchoServerBase
     internal EncryptedEchoServer(ushort port) : base(port)
     {
         using RSA rsa = RSA.Create();
-        // using RSACryptoServiceProvider rsa = new();
 
         // save the public and private keys in PKCS#1 format
         publicKeyPKCS1 = rsa.ExportRSAPublicKey();
@@ -60,9 +59,9 @@ internal sealed class EncryptedEchoServer : EchoServerBase
         byte[]? hmacKey = null;
         try
         {
-            // Create a new instance of RSACryptoServiceProvider.
-            // using RSACryptoServiceProvider rsa = new();
+            // Create a new instance of RSA
             using RSA rsa = RSA.Create();
+
             // Import the RSA Key information. This needs
             // to include the private key information.
             rsa.ImportRSAPrivateKey(privateKeyPKCS1, out _);

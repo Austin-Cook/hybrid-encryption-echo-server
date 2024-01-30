@@ -30,7 +30,8 @@ internal sealed class EncryptedEchoClient : EchoClientBase
 
         try
         {
-            using RSACryptoServiceProvider rsa = new();
+            using RSA rsa = RSA.Create();
+            // using RSACryptoServiceProvider rsa = new();
             rsa.ImportRSAPublicKey(serverPublicKey, out _);
         }
         catch (CryptographicException e)
@@ -83,9 +84,8 @@ internal sealed class EncryptedEchoClient : EchoClientBase
 
         try
         {
-            // Create a new instance of RSACryptoServiceProvider
+            // Create a new instance of RSA
             using RSA rsa = RSA.Create();
-            // using RSACryptoServiceProvider rsa = new();
 
             // Import the RSA Key information. This only needs
             // to include the public key information.
