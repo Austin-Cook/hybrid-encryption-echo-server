@@ -26,8 +26,6 @@ internal sealed class EncryptedEchoClient : EchoClientBase
         // todo: Step 1: Get the server's public key. Decode using Base64.
         // Throw a CryptographicException if the received key is invalid.
 
-        // Console.WriteLine(message);
-
         serverPublicKey = Convert.FromBase64String(message);
 
         try
@@ -37,8 +35,7 @@ internal sealed class EncryptedEchoClient : EchoClientBase
         }
         catch (CryptographicException e)
         {
-            Console.WriteLine(e.Message);
-            Environment.Exit(0);
+            throw new CryptographicException("Error: Invalid public key received from server: " + e.Message);
         }
 
     }
@@ -46,7 +43,7 @@ internal sealed class EncryptedEchoClient : EchoClientBase
     /// <inheritdoc />
     public override string TransformOutgoingMessage(string input)
     {
-        byte[] data = Settings.Encoding.GetBytes(input);
+        byte[] data = Encoding.UTF8.GetBytes(input);
 
         // Step 1: Encrypt the input using hybrid encryption.
         // Encrypt using AES with CBC mode and PKCS7 padding.
@@ -67,14 +64,14 @@ internal sealed class EncryptedEchoClient : EchoClientBase
         csEncrypt.FlushFinalBlock();
         byte[] encryptedInput = msEncrypt.ToArray();
 
-        Console.WriteLine("aes key in client: " + BitConverter.ToString(aes.Key)); // .Replace("-", "")
-        Console.WriteLine("Message right after encryption: " + BitConverter.ToString(encryptedInput));
+        Logger.LogDebug("AES key in client: {key}", BitConverter.ToString(aes.Key));
+        Logger.LogDebug("Message right after encryption: {message}", BitConverter.ToString(encryptedInput));
 
         // Step 2: Generate an HMAC of the message.
         // Use the SHA256 variant of HMAC.
         // Use a different key each time.
         using HMACSHA256 hmac = new();
-        byte[] messageHash = hmac.ComputeHash(Encoding.Unicode.GetBytes(input));
+        byte[] messageHash = hmac.ComputeHash(Encoding.UTF8.GetBytes(input));
 
         // Step 3: Encrypt the message encryption and HMAC keys using RSA.
         // Encrypt using the OAEP padding scheme with SHA256.
@@ -87,20 +84,22 @@ internal sealed class EncryptedEchoClient : EchoClientBase
         try
         {
             // Create a new instance of RSACryptoServiceProvider
-            using RSACryptoServiceProvider rsa = new();
+            using RSA rsa = RSA.Create();
+            // using RSACryptoServiceProvider rsa = new();
 
             // Import the RSA Key information. This only needs
             // to include the public key information.
             rsa.ImportRSAPublicKey(serverPublicKey, out _);
 
             // Encrypt the byte array with OAEP padding
-            aesKeyEncrypted = rsa.Encrypt(aesKey, true);
-            hmacKeyEncrypted = rsa.Encrypt(hmacKey, true);
+            aesKeyEncrypted = rsa.Encrypt(aesKey, RSAEncryptionPadding.OaepSHA256);
+            hmacKeyEncrypted = rsa.Encrypt(hmacKey, RSAEncryptionPadding.OaepSHA256);
+            // hmacKeyEncrypted = rsa.Encrypt(hmacKey, RSAEncryptionPadding.OaepSHA256);
+            // hmacKeyEncrypted = rsa.Encrypt(hmacKey, RSAEncryptionPadding.CreateOaep(HashAlgorithmName.SHA256));
         }
         catch (CryptographicException e)
         {
-            Console.WriteLine(e.Message);
-            Environment.Exit(0);
+            throw new CryptographicException("Error: Unable to encrypt AES and HMAC keys: " + e.Message);
         }
 
         // Step 4: Put the data in an EncryptedMessage object and serialize to JSON.
@@ -108,7 +107,8 @@ internal sealed class EncryptedEchoClient : EchoClientBase
         // var message = new EncryptedMessage(...);
         // return JsonSerializer.Serialize(message);
         EncryptedMessage encryptedMessage = new(aesKeyEncrypted, aes.IV, encryptedInput, hmacKeyEncrypted, messageHash);
-        Console.WriteLine("Hash in client before sending: " + Encoding.Unicode.GetString(encryptedMessage.HMAC));
+
+        Logger.LogDebug("Hash in client before sending: {hash}", Encoding.UTF8.GetString(encryptedMessage.HMAC));
 
         return JsonSerializer.Serialize(encryptedMessage);
     }
@@ -118,13 +118,20 @@ internal sealed class EncryptedEchoClient : EchoClientBase
     {
         // todo: Step 1: Deserialize the message.
         // var signedMessage = JsonSerializer.Deserialize<SignedMessage>(input);
+        SignedMessage message = JsonSerializer.Deserialize<SignedMessage>(input);
 
         // todo: Step 2: Check the messages signature.
         // Use PSS padding with SHA256.
         // Throw an InvalidSignatureException if the signature is bad.
+        using RSA rsa = RSA.Create();
+        rsa.ImportRSAPublicKey(serverPublicKey, out _);
+        if (!rsa.VerifyData(message.Message, message.Signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pss))
+        {
+            throw new InvalidSignatureException("Error: The signature on the server response was invalid");
+        }
 
         // todo: Step 3: Return the message from the server.
         // return Settings.Encoding.GetString(signedMessage.Message);
-        return input;
+        return Encoding.UTF8.GetString(message.Message);
     }
 }

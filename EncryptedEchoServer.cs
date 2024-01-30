@@ -18,7 +18,8 @@ internal sealed class EncryptedEchoServer : EchoServerBase
     /// <inheritdoc />
     internal EncryptedEchoServer(ushort port) : base(port)
     {
-        using RSACryptoServiceProvider rsa = new();
+        using RSA rsa = RSA.Create();
+        // using RSACryptoServiceProvider rsa = new();
 
         // save the public and private keys in PKCS#1 format
         publicKeyPKCS1 = rsa.ExportRSAPublicKey();
@@ -37,7 +38,7 @@ internal sealed class EncryptedEchoServer : EchoServerBase
         // ensure the public key is set
         if (publicKeyPKCS1 == null)
         {
-            Environment.Exit(0);
+            throw new CryptographicException("Error: (GetServerHello) the public key is null");
         }
 
         string publicKeyPKCS1Base64 = Convert.ToBase64String(publicKeyPKCS1);
@@ -60,25 +61,24 @@ internal sealed class EncryptedEchoServer : EchoServerBase
         try
         {
             // Create a new instance of RSACryptoServiceProvider.
-            using RSACryptoServiceProvider rsa = new();
+            // using RSACryptoServiceProvider rsa = new();
+            using RSA rsa = RSA.Create();
             // Import the RSA Key information. This needs
             // to include the private key information.
             rsa.ImportRSAPrivateKey(privateKeyPKCS1, out _);
 
             // Decrypt the byte array with OAEP padding.
-            aesKey = rsa.Decrypt(encryptedMessage.AesKeyWrap, true);
+            aesKey = rsa.Decrypt(encryptedMessage.AesKeyWrap, RSAEncryptionPadding.OaepSHA256);
+            hmacKey = rsa.Decrypt(encryptedMessage.HMACKeyWrap, RSAEncryptionPadding.OaepSHA256);
 
-            Console.WriteLine("aes key received by server: " + BitConverter.ToString(aesKey)); // .Replace("-", "")
-            hmacKey = rsa.Decrypt(encryptedMessage.HMACKeyWrap, true);
+            Logger.LogDebug("aes key received by server: {key}", BitConverter.ToString(aesKey));
         }
         catch (CryptographicException e)
         {
-            Console.WriteLine(e.ToString());
-            Environment.Exit(0);
+            throw new CryptographicException("Error: (Server) Unable to decrypt the AES or HMAC key" + e.Message);
         }
 
-
-        Console.WriteLine("Message right before decryption: " + Encoding.Unicode.GetString(encryptedMessage.Message));
+        Logger.LogDebug("Message right before decryption: {message}", Encoding.UTF8.GetString(encryptedMessage.Message));
 
         // decrypt the message
         using Aes aes = Aes.Create();
@@ -96,58 +96,42 @@ internal sealed class EncryptedEchoServer : EchoServerBase
         // and place them in a string.
         string plaintext = srDecrypt.ReadToEnd();
 
-        // DELETEME
-        Console.WriteLine("Plaintext: " + plaintext);
-
-
         // Step 3: Verify the HMAC.
         // Throw an InvalidSignatureException if the received hmac is bad.
         using HMACSHA256 hmac = new(hmacKey);
-        byte[] localHash = hmac.ComputeHash(Encoding.Unicode.GetBytes(plaintext));
-        Console.WriteLine("Hash from client: " + Encoding.Unicode.GetString(encryptedMessage.HMAC));
-        Console.WriteLine("Local hash      : " + Encoding.Unicode.GetString(localHash));
+        byte[] localHash = hmac.ComputeHash(Encoding.UTF8.GetBytes(plaintext));
+
+        Logger.LogDebug("Hash from client: {hash}", Encoding.UTF8.GetString(encryptedMessage.HMAC));
+        Logger.LogDebug("Local hash      : {localHash}", Encoding.UTF8.GetString(localHash));
 
         // check for equality
-        bool match = true;
-        if (localHash.Length != encryptedMessage.HMAC.Length)
-        {
-            match = false;
-        }
-        for (int i = 0; i < localHash.Length; i++)
-        {
-            if (localHash[i] != encryptedMessage.HMAC[i])
-            {
-                match = false;
-                Console.WriteLine("inequality found: " + localHash[i] + ", " + encryptedMessage.HMAC[i]);
-            }
-        }
-        if (!match)
+        if (!localHash.SequenceEqual(encryptedMessage.HMAC))
         {
             throw new InvalidSignatureException("The two hashes are not equal");
         }
-        // if (!localHash.SequenceEqual(encryptedMessage.HMAC)) {
-        //     throw new InvalidSignatureException("The two hashes are not equal");
-        // }
 
         // Step 4: Return the decrypted and verified message from the server.
         // return Settings.Encoding.GetString(decryptedMessage);
-
         return plaintext;
     }
 
     /// <inheritdoc />
     public override string TransformOutgoingMessage(string input)
     {
-        byte[] data = Settings.Encoding.GetBytes(input);
+        byte[] data = Encoding.UTF8.GetBytes(input);
 
         // todo: Step 1: Sign the message.
         // Use PSS padding with SHA256.
+        using RSA rsa = RSA.Create();
+        rsa.ImportRSAPrivateKey(privateKeyPKCS1, out _);
+        byte[] signature = rsa.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
 
         // todo: Step 2: Put the data in an SignedMessage object and serialize to JSON.
         // Return that JSON.
         // var message = new SignedMessage(...);
         // return JsonSerializer.Serialize(message);
+        SignedMessage message = new(data, signature);
 
-        return input;
+        return JsonSerializer.Serialize(message);
     }
 }
